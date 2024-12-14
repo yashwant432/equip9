@@ -1,45 +1,45 @@
+import os
 from flask import Flask, jsonify
 import boto3
 
 app = Flask(__name__)
 
-# S3 client with region specified
+# Configure S3 client
+s3_client = boto3.client('s3')
 bucket_name = 'e9-http-service-bucket'
-region_name = 'ap-south-1'  # Replace with the correct region
 
-s3_client = boto3.client('s3', region_name=region_name)
-
-@app.route('/list-bucket-content/<path:prefix>', methods=['GET'])
-@app.route('/list-bucket-content', methods=['GET'])
-def list_bucket_content(prefix=''):
+@app.route('/list-bucket-content', defaults={'path': ''})
+@app.route('/list-bucket-content/<path:path>')
+def list_bucket_content(path):
     try:
-        # If prefix is empty, list top-level objects (files and directories)
-        if prefix == '':
+        # If path is empty, list top-level contents of the bucket
+        if path == '':
             response = s3_client.list_objects_v2(Bucket=bucket_name, Delimiter='/')
-        else:
-            # List objects under the specified directory (prefix)
-            response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=prefix, Delimiter='/')
+            # Include all files and folders from the top level, excluding the directory prefixes
+            contents = [content['Prefix'].strip('/') for content in response.get('CommonPrefixes', [])]
+            contents.extend([content['Key'] for content in response.get('Contents', [])])
+            
+            # Filter out directories from the contents (remove items that end with '/')
+            contents = [item for item in contents if not item.endswith('/')]
+            return jsonify({'content': contents})
+
+        # If path is specified, list contents inside that directory
+        response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=path + '/', Delimiter='/')
+        # Include all files and folders inside the specified path, excluding the directory prefixes
+        contents = [content['Prefix'].strip('/') for content in response.get('CommonPrefixes', [])]
+        contents.extend([content['Key'] for content in response.get('Contents', [])])
         
-        # Log the entire response from S3 for debugging purposes
-        print("S3 Response:", response)
-
-        # Get directories (common prefixes)
-        directories = [item['Prefix'].strip('/') for item in response.get('CommonPrefixes', [])]
+        # Filter out directories from the contents (remove items that end with '/')
+        contents = [item for item in contents if not item.endswith('/')]
         
-        # Get files (excluding directories, objects without a trailing slash)
-        files = [item['Key'].strip('/') for item in response.get('Contents', []) if not item['Key'].endswith('/')]
+        # If no contents are found, return an empty array
+        if not contents:
+            return jsonify({'content': []})
 
-        # If the prefix is provided and no files or directories are found, return an empty list
-        if prefix and not directories and not files:
-            content = []
-        else:
-            content = directories + files
-
-        return jsonify({"content": content})
+        return jsonify({'content': contents})
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({'error': str(e)}), 500
 
-# Run Flask app on all available interfaces (0.0.0.0)
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=5000)
